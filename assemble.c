@@ -12,7 +12,7 @@ bool assemble_string(char *str, uint64_t address, unsigned char **output, size_t
 	*output = malloc(16);
 
 	char *cmd;
-	asprintf(&cmd, "rasm2 -a x86 -b 64 -o 0x%llx \"%s\"", address, str);
+	asprintf(&cmd, "rasm2 -a x86.nasm -b 64 -o 0x%llx \"%s\"", address, str);
 
 	FILE *f = popen(cmd, "r");
 	free(cmd);
