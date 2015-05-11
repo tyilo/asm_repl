@@ -29,3 +29,7 @@ Todo
 * Support more platforms (linux).
 * Use readline for prompt.
 * Arithmetic for commands (`.read rip-0x10`).
+* Ctrl-C to break.
+* Toggle viewing of registers (`.show [gpr|fpr|status]`).
+* Allow modifying non general purpose registers directly.
+* Variables to specific memory addresses (`.alloc 4` -> `.write $alloc 12345678`).
