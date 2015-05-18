@@ -7,6 +7,8 @@
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 #include <pthread.h>
+#include <setjmp.h>
+#include <editline/readline.h>
 
 #include "assemble.h"
 #include "colors.h"
@@ -44,14 +46,13 @@ typedef union {
 	} flags;
 } rflags_t;
 
-bool uncaught_exception = false;
 pthread_mutex_t mutex;
 
 #define MEMORY_SIZE 0x10000
 #define INT3 0xCC
 
 #define STD_FAIL(s, x) do { \
-	kern_return_t ret = (x); \
+	int ret = (x); \
 	if(ret != 0) { \
 		perror(s "()"); \
 		exit(ret); \
@@ -139,14 +140,10 @@ void *exception_handler_main(void *arg) {
 }
 
 kern_return_t  catch_mach_exception_raise_state(mach_port_t __unused exception_port, exception_type_t __unused exception, exception_data_t __unused code, mach_msg_type_number_t __unused code_count, int * __unused flavor, thread_state_t __unused in_state, mach_msg_type_number_t __unused in_state_count, thread_state_t __unused out_state, mach_msg_type_number_t * __unused out_state_count) {
-	uncaught_exception = true;
-	pthread_mutex_unlock(&mutex);
 	return KERN_FAILURE;
 }
 
 kern_return_t  catch_mach_exception_raise_state_identity(mach_port_t __unused exception_port, mach_port_t __unused thread, mach_port_t __unused task, exception_type_t __unused exception, exception_data_t __unused code, mach_msg_type_number_t __unused code_count, int * __unused flavor, thread_state_t __unused in_state, mach_msg_type_number_t __unused in_state_count, thread_state_t __unused out_state, mach_msg_type_number_t * __unused out_state_count) {
-	uncaught_exception = true;
-	pthread_mutex_unlock(&mutex);
 	return KERN_FAILURE;
 }
 
@@ -158,8 +155,6 @@ kern_return_t catch_mach_exception_raise(mach_port_t __unused exception_port, ma
 		pthread_mutex_unlock(&mutex);
 		return KERN_SUCCESS;
 	} else {
-		uncaught_exception = true;
-		pthread_mutex_unlock(&mutex);
 		return KERN_FAILURE;
 	}
 }
@@ -175,6 +170,8 @@ void setup_exception_handler(task_t task) {
 }
 
 void print_registers(x86_thread_state64_t *state) {
+	puts("");
+
 	static x86_thread_state64_t last_state;
 	static rflags_t last_rflags;
 	static int first = 1;
@@ -241,19 +238,34 @@ size_t count_tokens(char *str, char *seperators) {
 	return i;
 }
 
-void read_input(task_t task, x86_thread_state64_t *state) {
-	while(true) {
-		printf("\n> ");
-		char *line = NULL;
-		size_t linecap = 0;
-		ssize_t linelen = getline(&line, &linecap, stdin);
+char *histfile;
+bool waiting_for_input = false;
+jmp_buf prompt_jmp_buf;
 
-		if(linelen == -1) {
+void read_input(task_t task, x86_thread_state64_t *state) {
+	static char *line = NULL;
+	while(true) {
+		if(line) {
+			free(line);
+		}
+
+		waiting_for_input = true;
+		setjmp(prompt_jmp_buf);
+
+		line = readline("> ");
+
+		waiting_for_input = false;
+
+		if(!line) {
 			exit(0);
 		}
 
-		// Remove newline
-		line[linelen - 1] = '\0';
+		if(line[0] == '\0') {
+			continue;
+		}
+
+		add_history(line);
+		write_history(histfile);
 
 		char *cmds[] = {"read", "write", "alloc", "regs"};
 
@@ -290,10 +302,6 @@ void read_input(task_t task, x86_thread_state64_t *state) {
 			}
 		}
 
-		if(line[0] == '\0') {
-			continue;
-		}
-
 		if(line[0] == '?') {
 			if(cmd_index != -1) {
 				puts(help[cmd_index]);
@@ -314,12 +322,12 @@ void read_input(task_t task, x86_thread_state64_t *state) {
 				   "Any other input will be interpreted as x86_64 assembly"
 			);
 		} else if(line[0] == '.') {
-			size_t args = count_tokens(line, " \n") - 1;
+			size_t args = count_tokens(line, " ") - 1;
 
 			char *p = line + 1;
-			char *cmd = strsep(&p, " \n");
-			char *arg1 = strsep(&p, " \n");
-			char *arg2 = strsep(&p, " \n");
+			char *cmd = strsep(&p, " ");
+			char *arg1 = strsep(&p, " ");
+			char *arg2 = strsep(&p, " ");
 
 			if(cmd_index == 0) {
 				uint64_t address;
@@ -411,6 +419,14 @@ void read_input(task_t task, x86_thread_state64_t *state) {
 	}
 }
 
+void setup_readline() {
+	// Disable file auto-complete
+	rl_bind_key('\t', rl_insert);
+
+	asprintf(&histfile, "%s/%s", getenv("HOME"), ".asm_repl_history");
+	read_history(histfile);
+}
+
 #define READY 'R'
 
 void write_ready(int fd) {
@@ -422,6 +438,31 @@ void read_ready(int fd) {
 	char buf;
 	if(read(fd, &buf, sizeof(buf)) <= 0 || buf != READY) {
 		puts("Failed to read");
+		exit(1);
+	}
+}
+
+task_t child_task;
+
+void sigint_handler(int sig) {
+	if(waiting_for_input) {
+		// Clear line
+		printf("\33[2K\r");
+		// Print prompt again
+		longjmp(prompt_jmp_buf, 0);
+	} else {
+		// Suspend child and prompt for input
+		puts("");
+		task_suspend(child_task);
+		pthread_mutex_unlock(&mutex);
+	}
+}
+
+void sigchld_handler(int sig) {
+	int status;
+	pid_t result = waitpid(-1, &status, WNOHANG);
+	if(WIFSIGNALED(status)) {
+		puts("Process died!");
 		exit(1);
 	}
 }
@@ -447,6 +488,8 @@ int main(int argc, const char *argv[]) {
 		close(parent_read);
 		close(parent_write);
 
+		signal(SIGINT, SIG_IGN);
+
 		// Drop privileges
 		setgid(-2);
 		setuid(-2);
@@ -463,11 +506,17 @@ int main(int argc, const char *argv[]) {
 		close(child_read);
 		close(child_write);
 
+		signal(SIGINT, sigint_handler);
+		signal(SIGCHLD, sigchld_handler);
+
+		setup_readline();
+
 		// Wait for the child to be ready
 		read_ready(parent_read);
 
 		task_t task;
 		KERN_FAIL("task_for_pid", task_for_pid(mach_task_self(), pid, &task));
+		child_task = task;
 
 		pthread_mutex_init(&mutex, NULL);
 		pthread_mutex_lock(&mutex);
@@ -489,11 +538,6 @@ int main(int argc, const char *argv[]) {
 		while(true) {
 			// Wait for exception handler
 			pthread_mutex_lock(&mutex);
-
-			if(uncaught_exception) {
-				puts("Child died.");
-				exit(1);
-			}
 
 			x86_thread_state64_t state;
 			mach_msg_type_number_t stateCount = x86_AVX_STATE64_COUNT;

@@ -1,5 +1,5 @@
 all:
-	cc $(wildcard *.c mach_exc/*c) -o asm_repl
+	$(CC) $(wildcard *.c mach_exc/*c) -ledit -o asm_repl
 
 clean:
 	rm -f asm_repl

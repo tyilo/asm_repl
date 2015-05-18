@@ -27,9 +27,7 @@ Todo
 * Use a library (libr?) for assembling instead of reading the output of running `rasm2`.
 * Support more architectures (32-bit x86, arm).
 * Support more platforms (linux).
-* Use readline for prompt.
 * Arithmetic for commands (`.read rip-0x10`).
-* Ctrl-C to break.
 * Toggle viewing of registers (`.show [gpr|fpr|status]`).
 * Allow modifying non general purpose registers directly.
 * Variables to specific memory addresses (`.alloc 4` -> `.write $alloc 12345678`).
