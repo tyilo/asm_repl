@@ -460,7 +460,7 @@ void sigint_handler(int sig) {
 
 void sigchld_handler(int sig) {
 	int status;
-	pid_t result = waitpid(-1, &status, WNOHANG);
+	waitpid(-1, &status, WNOHANG);
 	if(WIFSIGNALED(status)) {
 		puts("Process died!");
 		exit(1);
@@ -491,8 +491,8 @@ int main(int argc, const char *argv[]) {
 		signal(SIGINT, SIG_IGN);
 
 		// Drop privileges
-		setgid(-2);
-		setuid(-2);
+		STD_FAIL("setgid", setgid(-2));
+		STD_FAIL("setuid", setuid(-2));
 
 		// We are ready for the parent to register the exception handlers
 		write_ready(child_write);

@@ -1,5 +1,7 @@
+sdk = $(shell xcodebuild -sdk -version | grep '^Path: .*MacOSX10.10' | awk '{print $$2}')
+
 all:
-	$(CC) $(wildcard *.c mach_exc/*c) -ledit -o asm_repl
+	$(CC) $(CFLAGS) $(wildcard *.c mach_exc/*c) -ledit -o asm_repl
 
 clean:
 	rm -f asm_repl
@@ -10,5 +12,7 @@ run: all
 mach_exc:
 	mkdir -p mach_exc; \
 	cd mach_exc; \
-	sdk=$$(xcodebuild -sdk -version | grep '^Path: .*MacOSX10.10' | awk '{print $$2}'); \
-	mig "$$sdk/usr/include/mach/mach_exc.defs"
+	mig "$(sdk)/usr/include/mach/mach_exc.defs"
+
+scan:
+	scan-build make CFLAGS='-isysroot $(sdk)'
