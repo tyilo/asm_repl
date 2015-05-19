@@ -9,6 +9,7 @@
 #include <pthread.h>
 #include <setjmp.h>
 #include <editline/readline.h>
+#include <ctype.h>
 
 #include "assemble.h"
 #include "colors.h"
@@ -548,13 +549,15 @@ void read_input(task_t task, thread_act_t thread, x86_thread_state64_t *state, x
 
 					const size_t row_bytes = 8;
 					for(int i = 0; i < count; i += row_bytes) {
-						char str[3 * row_bytes];
+						char str[3 * row_bytes + 2 + row_bytes];
 						for(int j = 0; j < row_bytes && i + j < count; j++) {
 							unsigned char c = data[i + j];
 							str[3 * j] = int2hex(c >> 4);
 							str[3 * j + 1] = int2hex(c & 0x0f);
 							str[3 * j + 2] = ' ';
+							str[3 * row_bytes + 1 + j] = isgraph(c)? c: '.';
 						}
+						str[3 * row_bytes] = ' ';
 						str[sizeof(str) - 1] = '\0';
 						printf("%llx: %s\n", address + i, str);
 					}
