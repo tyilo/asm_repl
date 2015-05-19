@@ -28,6 +28,4 @@ Todo
 * Support more architectures (32-bit x86, arm).
 * Support more platforms (linux).
 * Arithmetic for commands (`.read rip-0x10`).
-* Toggle viewing of registers (`.show [gpr|fpr|status]`).
-* Allow modifying non general purpose registers directly.
 * Variables to specific memory addresses (`.alloc 4` -> `.write $alloc 12345678`).

@@ -46,10 +46,22 @@ typedef union {
 	} flags;
 } rflags_t;
 
+typedef union {
+	_STRUCT_XMM_REG bytes;
+	double doubles[2];
+	float floats[4];
+	uint64_t ints[2];
+} xmm_value_t;
+
 pthread_mutex_t mutex;
 
 #define MEMORY_SIZE 0x10000
 #define INT3 0xCC
+
+#define ELEMENTS(x) (sizeof(x) / sizeof(*x))
+
+#define LIST(x)     x,
+#define STR_LIST(x) #x,
 
 #define STD_FAIL(s, x) do { \
 	int ret = (x); \
@@ -75,28 +87,35 @@ pthread_mutex_t mutex;
 	} \
 } else do {} while(0)
 
-void get_thread_state(thread_act_t thread, x86_thread_state64_t *state, mach_msg_type_number_t *stateCount) {
-	mach_msg_type_number_t _stateCount;
-	if(!stateCount) {
-		stateCount = &_stateCount;
-	}
-	*stateCount = x86_AVX_STATE64_COUNT;
-	KERN_FAIL("thread_get_state", thread_get_state(thread, x86_THREAD_STATE64, (thread_state_t)state, stateCount));
+void get_thread_state(thread_act_t thread, x86_thread_state64_t *state) {
+	mach_msg_type_number_t stateCount = x86_THREAD_STATE64_COUNT;
+	KERN_FAIL("thread_get_state", thread_get_state(thread, x86_THREAD_STATE64, (thread_state_t)state, &stateCount));
+}
+
+void set_thread_state(thread_act_t thread, x86_thread_state64_t *state) {
+	KERN_FAIL("thread_set_state", thread_set_state(thread, x86_THREAD_STATE64, (thread_state_t)state, x86_THREAD_STATE64_COUNT));
+}
+
+void get_float_state(thread_act_t thread, x86_float_state64_t *state) {
+	mach_msg_type_number_t stateCount = x86_FLOAT_STATE64_COUNT;
+	KERN_FAIL("thread_get_state", thread_get_state(thread, x86_FLOAT_STATE64, (thread_state_t)state, &stateCount));
+}
+
+void set_float_state(thread_act_t thread, x86_float_state64_t *state) {
+	KERN_FAIL("thread_set_state", thread_set_state(thread, x86_FLOAT_STATE64, (thread_state_t)state, x86_FLOAT_STATE64_COUNT));
 }
 
 uint64_t get_rip(thread_act_t thread) {
 	x86_thread_state64_t state;
-	mach_msg_type_number_t stateCount = x86_AVX_STATE64_COUNT;
-	get_thread_state(thread, &state, &stateCount);
+	get_thread_state(thread, &state);
 	return state.__rip;
 }
 
 void set_rip(thread_act_t thread, uint64_t rip_value) {
 	x86_thread_state64_t state;
-	mach_msg_type_number_t stateCount = x86_AVX_STATE64_COUNT;
-	get_thread_state(thread, &state, &stateCount);
+	get_thread_state(thread, &state);
 	state.__rip = rip_value;
-	KERN_FAIL("thread_set_state", thread_set_state(thread, x86_THREAD_STATE64, (thread_state_t)&state, stateCount));
+	set_thread_state(thread, &state);
 }
 
 void write_int3(task_t task, mach_vm_address_t address) {
@@ -169,40 +188,96 @@ void setup_exception_handler(task_t task) {
 	STD_FAIL("pthread_create", pthread_create(&exception_handler_thread, NULL, exception_handler_main, (void *)(uintptr_t)exception_port));
 }
 
-void print_registers(x86_thread_state64_t *state) {
+char *register_types[] =     {"gpr", "status", "fpr-hex", "fpr-double"};
+bool show_register_types[] = {true,  true,     false,     false};
+
+void print_registers(x86_thread_state64_t *state, x86_float_state64_t *float_state) {
 	puts("");
 
 	static x86_thread_state64_t last_state;
+	static x86_float_state64_t last_float_state;
 	static rflags_t last_rflags;
-	static int first = 1;
+	static bool first = true;
 
-	int i = 0;
+	if(show_register_types[3]) {
+#define X(r) do { \
+	xmm_value_t v = (xmm_value_t)float_state->__fpu_ ## r; \
+	xmm_value_t l = (xmm_value_t)last_float_state.__fpu_ ## r; \
+	bool c1 = !first && v.ints[0] != l.ints[0]; \
+	bool c2 = !first && v.ints[1] != l.ints[1]; \
+	printf(KGRN "%5s:" RESET " { %s%e" RESET ", %s%e" RESET " }\n", #r, c1? KRED: RESET, v.doubles[0], c2? KRED: RESET, v.doubles[1]); \
+} while(false)
+#include "float_registers.h"
+#undef X
+	}
+
+	if(show_register_types[2]) {
+#define X(r) do { \
+	xmm_value_t v = (xmm_value_t)float_state->__fpu_ ## r; \
+	xmm_value_t l = (xmm_value_t)last_float_state.__fpu_ ## r; \
+	bool c = !first && (v.ints[0] != l.ints[0] || v.ints[1] != l.ints[1]); \
+	printf(KGRN "%5s: %s%016" PRIX64 "%016" PRIX64 RESET "\n", #r, c? KRED: RESET, v.ints[0], v.ints[1]); \
+} while(false)
+#include "float_registers.h"
+#undef X
+	}
+
+	if(show_register_types[0]) {
+		int i = 0;
 #define X(r) do { \
 	uint64_t v = state->__ ## r; \
-	int c = !first && v != last_state.__ ## r; \
+	bool c = !first && v != last_state.__ ## r; \
 	printf(KGRN "%3s: %s%016" PRIX64 RESET "%s", #r, c? KRED: RESET, v, (i % 3 == 2 || i == REGISTERS - 1)? "\n": "  "); \
 	i++; \
 } while(false)
 #include "registers.h"
 #undef X
-
-	printf(KBLU "Status: " KNRM);
+	}
 
 	rflags_t rflags = (rflags_t)state->__rflags;
 
+	if(show_register_types[1]) {
+		printf(KBLU "Status: " KNRM);
+
 #define X(f) do { \
 	uint8_t v = rflags.flags.f; \
-	int c = !first && v != last_rflags.flags.f; \
+	bool c = !first && v != last_rflags.flags.f; \
 	printf("  " KGRN "%s: %s%d" RESET, #f, c? KRED: RESET, v); \
 } while(false)
 #include "status_flags.h"
 #undef X
+	}
 
 	puts("");
 
-	first = 0;
+	first = false;
 	last_state = *state;
+	last_float_state = *float_state;
 	last_rflags = rflags;
+}
+
+uint64_t *get_gpr_pointer(char *name, x86_thread_state64_t *state) {
+#define X(r) do { \
+	if(strcmp(name, #r) == 0) { \
+		return &(state->__ ## r); \
+	} \
+} while(false)
+#include "registers.h"
+#undef X
+
+	return NULL;
+}
+
+xmm_value_t *get_fpr_pointer(char *name, x86_float_state64_t *float_state) {
+#define X(r) do { \
+	if(strcmp(name, #r) == 0) { \
+		return (xmm_value_t *)&(float_state->__fpu_ ## r); \
+	} \
+} while(false)
+#include "float_registers.h"
+#undef X
+
+	return NULL;
 }
 
 bool get_number(char *str, uint64_t *val) {
@@ -216,14 +291,11 @@ bool get_value(char *str, x86_thread_state64_t *state, uint64_t *val) {
 		return true;
 	}
 
-#define X(r) do { \
-	if(strcmp(str, #r) == 0) { \
-		*val = state->__ ## r; \
-		return true; \
-	} \
-} while(false)
-#include "registers.h"
-#undef X
+	uint64_t *gpr = get_gpr_pointer(str, state);
+	if(gpr) {
+		*val = *gpr;
+		return true;
+	}
 
 	return false;
 }
@@ -242,7 +314,7 @@ char *histfile;
 bool waiting_for_input = false;
 jmp_buf prompt_jmp_buf;
 
-void read_input(task_t task, x86_thread_state64_t *state) {
+void read_input(task_t task, thread_act_t thread, x86_thread_state64_t *state, x86_float_state64_t *float_state) {
 	static char *line = NULL;
 	while(true) {
 		if(line) {
@@ -267,9 +339,27 @@ void read_input(task_t task, x86_thread_state64_t *state) {
 		add_history(line);
 		write_history(histfile);
 
-		char *cmds[] = {"read", "write", "alloc", "regs"};
+#define FOREACH_CMD(X) \
+	X(set) \
+	X(read) \
+	X(write) \
+	X(alloc) \
+	X(regs) \
+	X(show)
+		typedef enum {
+			FOREACH_CMD(LIST)
+		} cmds;
+		static char *cmd_names[] = {
+			FOREACH_CMD(STR_LIST)
+		};
 
-		char *help[] = {
+		static char *help[] = {
+			"Usage: .set register value\n"
+			"Changes the value of a register\n"
+			"\n"
+			"  register - register name (GPR, FPR or status)\n"
+			"  value    - hex if GPR or FPR, 0 or 1 if status",
+
 			"Usage: .read address [len]\n"
 			"Displays a hexdump of memory starting at address\n"
 			"\n"
@@ -288,23 +378,31 @@ void read_input(task_t task, x86_thread_state64_t *state) {
 			"  len - the amount of bytes to allocate",
 
 			"Usage: .regs\n"
-			"Displays the values of the GPU registers"
+			"Displays the values of the registers currently toggled on",
+
+			"Usage: .show [gpr|status|fpr-hex|fpr-double]\n"
+			"Toggles which types of registers are shown\n"
+			"\n"
+			"  gpr        - General purpose registers (rax, rsp, rip, ...)\n"
+			"  status     - Status registers (CF, ZF, ...)\n"
+			"  fpr-hex    - Floating point registers shown in hex (xmm0, xmm1, ...)\n"
+			"  fpr-double - Floating point registers shown as doubles"
 		};
 
-		ssize_t cmd_index = -1;
+		ssize_t cmd = -1;
 		if(line[0] == '?' || line[0] == '.') {
-			for(size_t i = 0; i != sizeof(cmds) / sizeof(*cmds); i++) {
-				size_t len = strlen(cmds[i]);
-				if(strncmp(cmds[i], line + 1, len) == 0 && (line[len + 1] == '\0' || line[len + 1] == ' ')) {
-					cmd_index = i;
+			for(size_t i = 0; i != ELEMENTS(cmd_names); i++) {
+				size_t len = strlen(cmd_names[i]);
+				if(strncmp(cmd_names[i], line + 1, len) == 0 && (line[len + 1] == '\0' || line[len + 1] == ' ')) {
+					cmd = i;
 					break;
 				}
 			}
 		}
 
 		if(line[0] == '?') {
-			if(cmd_index != -1) {
-				puts(help[cmd_index]);
+			if(cmd != -1) {
+				puts(help[cmd]);
 				continue;
 			}
 
@@ -314,10 +412,12 @@ void read_input(task_t task, x86_thread_state64_t *state) {
 				   "    ?[cmd] - show help for a command\n"
 				   "\n"
 				   "  Commands:\n"
+				   "    .set   - change value of register\n"
 				   "    .read  - read from memory\n"
 				   "    .write - write to memory\n"
 				   "    .alloc - allocate memory\n"
-				   "    .regs  - shows the contents of the registers\n"
+				   "    .regs  - show the contents of the registers\n"
+				   "    .show  - toggle shown register types\n"
 				   "\n"
 				   "Any other input will be interpreted as x86_64 assembly"
 			);
@@ -325,84 +425,194 @@ void read_input(task_t task, x86_thread_state64_t *state) {
 			size_t args = count_tokens(line, " ") - 1;
 
 			char *p = line + 1;
-			char *cmd = strsep(&p, " ");
+			char *cmd_name = strsep(&p, " ");
 			char *arg1 = strsep(&p, " ");
 			char *arg2 = strsep(&p, " ");
 
-			if(cmd_index == 0) {
-				uint64_t address;
-				if(args < 1 || args > 2 || !get_value(arg1, state, &address)) {
-					puts(help[0]);
-					continue;
-				}
-
-				uint64_t len = 0x20;
-				if(args == 2) {
-					if(!get_number(arg2, &len)) {
-						puts(help[0]);
+			switch(cmd) {
+				case set: {
+					if(args != 2) {
+						puts(help[cmd]);
 						continue;
 					}
-				}
 
-				unsigned char *data = malloc(len);
-				mach_vm_size_t count;
-				KERN_TRY("mach_vm_read_overwrite", mach_vm_read_overwrite(task, address, len, (mach_vm_address_t)data, &count), {
-					free(data);
-					continue;
-				});
+					size_t len = strlen(arg2);
+					if(len == 1) {
+						char c = arg2[0];
+						if(c == '0' || c == '1') {
+							rflags_t *rflags = (rflags_t *)&state->__rflags;
+							bool matched = false;
+#define X(f) do { \
+	if(strcmp(arg1, #f) == 0) { \
+		rflags->flags.f = c - '0'; \
+		matched = true; \
+	} \
+} while(false)
+#include "status_flags.h"
+#undef X
 
-				const size_t row_bytes = 8;
-				for(int i = 0; i < count; i += row_bytes) {
-					char str[3 * row_bytes];
-					for(int j = 0; j < row_bytes && i + j < count; j++) {
-						unsigned char c = data[i + j];
-						str[3 * j] = int2hex(c >> 4);
-						str[3 * j + 1] = int2hex(c & 0x0f);
-						str[3 * j + 2] = ' ';
+							if(matched) {
+								continue;
+							}
+						}
 					}
-					str[sizeof(str) - 1] = '\0';
-					printf("%llx: %s\n", address + i, str);
-				}
 
-				free(data);
-			} else if(cmd_index == 1) {
-				uint64_t address;
-				size_t len = strlen(arg2);
-				if(args != 2 || !get_value(arg1, state, &address) || len % 2 != 0) {
-					puts(help[1]);
-					continue;
-				}
+					size_t size;
+					unsigned char *data = hex2bytes(arg2, &size, true);
+					if(!data) {
+						puts(help[cmd]);
+						continue;
+					}
 
-				unsigned char *data = malloc(len / 2);
-				for(int i = 0; i < len / 2; i++) {
-					data[i] = hex2int(arg2[2 * i]) * 0x10 + hex2int(arg2[2 * i + 1]);
-				}
+					size_t expected_size;
+					uint64_t *gpr = get_gpr_pointer(arg1, state);
+					xmm_value_t *xmm;
+					if(gpr) {
+						expected_size = sizeof(*gpr);
+					} else {
+						xmm = get_fpr_pointer(arg1, float_state);
+						if(xmm) {
+							expected_size = sizeof(*xmm);
+						}
+					}
 
-				KERN_TRY("mach_vm_write", mach_vm_write(task, address, (vm_offset_t)data, len / 2), {
+					if((!gpr && !xmm) || expected_size < size) {
+						puts(help[cmd]);
+						free(data);
+						continue;
+					}
+
+					if(gpr) {
+						*gpr = 0;
+						unsigned char *ptr = (void *)gpr;
+						for(size_t i = 0; i != size; i++) {
+							ptr[i] = data[size - i - 1];
+						}
+						set_thread_state(thread, state);
+					} else {
+						xmm->ints[0] = 0;
+						xmm->ints[1] = 0;
+						unsigned char *p1 = (void *)&(xmm->ints[1]);
+						unsigned char *p2 = (void *)&(xmm->ints[0]);
+						for(size_t i = 0; i != size; i++) {
+							if(i < sizeof(*xmm->ints)) {
+								p1[i] = data[size - i - 1];
+							} else {
+								p2[i % sizeof(*xmm->ints)] = data[size - i - 1];
+							}
+						}
+						set_float_state(thread, float_state);
+					}
+
 					free(data);
-					continue;
-				});
 
-				printf("Wrote %zu bytes.\n", len / 2);
-
-				free(data);
-			} else if(cmd_index == 2) {
-				uint64_t size;
-				if(args != 1 || !get_number(arg1, &size)) {
-					puts(help[2]);
-					continue;
+					break;
 				}
+				case read: {
+					uint64_t address;
+					if(args < 1 || args > 2 || !get_value(arg1, state, &address)) {
+						puts(help[cmd]);
+						continue;
+					}
 
-				mach_vm_address_t address;
-				KERN_TRY("mach_vm_allocate", mach_vm_allocate(task, &address, size, VM_FLAGS_ANYWHERE), {
-					continue;
-				});
+					uint64_t len = 0x20;
+					if(args == 2) {
+						if(!get_number(arg2, &len)) {
+							puts(help[cmd]);
+							continue;
+						}
+					}
 
-				printf("Allocated %llu bytes at 0x%llx\n", size, address);
-			} else if(cmd_index == 3) {
-				print_registers(state);
-			} else {
-				printf("Invalid command: .%s\n", cmd);
+					unsigned char *data = malloc(len);
+					mach_vm_size_t count;
+					KERN_TRY("mach_vm_read_overwrite", mach_vm_read_overwrite(task, address, len, (mach_vm_address_t)data, &count), {
+						free(data);
+						continue;
+					});
+
+					const size_t row_bytes = 8;
+					for(int i = 0; i < count; i += row_bytes) {
+						char str[3 * row_bytes];
+						for(int j = 0; j < row_bytes && i + j < count; j++) {
+							unsigned char c = data[i + j];
+							str[3 * j] = int2hex(c >> 4);
+							str[3 * j + 1] = int2hex(c & 0x0f);
+							str[3 * j + 2] = ' ';
+						}
+						str[sizeof(str) - 1] = '\0';
+						printf("%llx: %s\n", address + i, str);
+					}
+
+					free(data);
+					break;
+				}
+				case write: {
+					uint64_t address;
+					if(args != 2 || !get_value(arg1, state, &address)) {
+						puts(help[cmd]);
+						continue;
+					}
+
+					size_t size;
+					unsigned char *data = hex2bytes(arg2, &size, false);
+					if(!data) {
+						printf("Invalid hexpairs!\n");
+						continue;
+					}
+
+					KERN_TRY("mach_vm_write", mach_vm_write(task, address, (vm_offset_t)data, size), {
+						free(data);
+						continue;
+					});
+
+					printf("Wrote %zu bytes.\n", size);
+
+					free(data);
+					break;
+				}
+				case alloc: {
+					uint64_t size;
+					if(args != 1 || !get_number(arg1, &size)) {
+						puts(help[cmd]);
+						continue;
+					}
+
+					mach_vm_address_t address;
+					KERN_TRY("mach_vm_allocate", mach_vm_allocate(task, &address, size, VM_FLAGS_ANYWHERE), {
+						continue;
+					});
+
+					printf("Allocated %llu bytes at 0x%llx\n", size, address);
+					break;
+				}
+				case regs: {
+					print_registers(state, float_state);
+					break;
+				}
+				case show: {
+					if(args == 1) {
+						bool toggled = false;
+						for(size_t i = 0; i < sizeof(register_types) / sizeof(*register_types); i++) {
+							if(strcmp(arg1, register_types[i]) == 0) {
+								bool val = !show_register_types[i];
+								show_register_types[i] = val;
+								printf("%s toggled %s\n", arg1, val? "on": "off");
+								toggled = true;
+								break;
+							}
+						}
+						if(toggled) {
+							continue;
+						}
+					}
+
+					puts(help[cmd]);
+					break;
+				}
+				default: {
+					printf("Invalid command: .%s\n", cmd_name);
+					break;
+				}
 			}
 		} else {
 			unsigned char *assembly;
@@ -540,12 +750,14 @@ int main(int argc, const char *argv[]) {
 			pthread_mutex_lock(&mutex);
 
 			x86_thread_state64_t state;
-			mach_msg_type_number_t stateCount = x86_AVX_STATE64_COUNT;
-			get_thread_state(thread, &state, &stateCount);
+			get_thread_state(thread, &state);
 
-			print_registers(&state);
+			x86_float_state64_t float_state;
+			get_float_state(thread, &float_state);
 
-			read_input(task, &state);
+			print_registers(&state, &float_state);
+
+			read_input(task, thread, &state, &float_state);
 
 			task_resume(task);
 		}
