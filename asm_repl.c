@@ -60,8 +60,9 @@ pthread_mutex_t mutex;
 
 #define ELEMENTS(x) (sizeof(x) / sizeof(*x))
 
-#define LIST(x)     x,
-#define STR_LIST(x) #x,
+#define LIST(x, ...)     x,
+#define STR_LIST(x, ...) #x,
+#define LIST2(x, y, ...) y,
 
 #define STD_FAIL(s, x) do { \
 	int ret = (x); \
@@ -188,8 +189,23 @@ void setup_exception_handler(task_t task) {
 	STD_FAIL("pthread_create", pthread_create(&exception_handler_thread, NULL, exception_handler_main, (void *)(uintptr_t)exception_port));
 }
 
-char *register_types[] =     {"gpr", "status", "fpr-hex", "fpr-double"};
-bool show_register_types[] = {true,  true,     false,     false};
+#define FOREACH_TYPE(X) \
+	X(gpr, true) \
+	X(status, true) \
+	X(fpr_hex, false) \
+	X(fpr_double, false)
+
+typedef enum {
+	FOREACH_TYPE(LIST)
+} register_type;
+
+char *register_type_names[] = {
+	FOREACH_TYPE(STR_LIST)
+};
+
+bool show_register_types[] = {
+	FOREACH_TYPE(LIST2)
+};
 
 void print_registers(x86_thread_state64_t *state, x86_float_state64_t *float_state) {
 	puts("");
@@ -199,7 +215,7 @@ void print_registers(x86_thread_state64_t *state, x86_float_state64_t *float_sta
 	static rflags_t last_rflags;
 	static bool first = true;
 
-	if(show_register_types[3]) {
+	if(show_register_types[fpr_double]) {
 #define X(r) do { \
 	xmm_value_t v = (xmm_value_t)float_state->__fpu_ ## r; \
 	xmm_value_t l = (xmm_value_t)last_float_state.__fpu_ ## r; \
@@ -211,7 +227,7 @@ void print_registers(x86_thread_state64_t *state, x86_float_state64_t *float_sta
 #undef X
 	}
 
-	if(show_register_types[2]) {
+	if(show_register_types[fpr_hex]) {
 #define X(r) do { \
 	xmm_value_t v = (xmm_value_t)float_state->__fpu_ ## r; \
 	xmm_value_t l = (xmm_value_t)last_float_state.__fpu_ ## r; \
@@ -222,7 +238,7 @@ void print_registers(x86_thread_state64_t *state, x86_float_state64_t *float_sta
 #undef X
 	}
 
-	if(show_register_types[0]) {
+	if(show_register_types[gpr]) {
 		int i = 0;
 #define X(r) do { \
 	uint64_t v = state->__ ## r; \
@@ -236,7 +252,7 @@ void print_registers(x86_thread_state64_t *state, x86_float_state64_t *float_sta
 
 	rflags_t rflags = (rflags_t)state->__rflags;
 
-	if(show_register_types[1]) {
+	if(show_register_types[status]) {
 		printf(KBLU "Status: " KNRM);
 
 #define X(f) do { \
@@ -380,13 +396,13 @@ void read_input(task_t task, thread_act_t thread, x86_thread_state64_t *state, x
 			"Usage: .regs\n"
 			"Displays the values of the registers currently toggled on",
 
-			"Usage: .show [gpr|status|fpr-hex|fpr-double]\n"
+			"Usage: .show [gpr|status|fpr_hex|fpr_double]\n"
 			"Toggles which types of registers are shown\n"
 			"\n"
 			"  gpr        - General purpose registers (rax, rsp, rip, ...)\n"
 			"  status     - Status registers (CF, ZF, ...)\n"
-			"  fpr-hex    - Floating point registers shown in hex (xmm0, xmm1, ...)\n"
-			"  fpr-double - Floating point registers shown as doubles"
+			"  fpr_hex    - Floating point registers shown in hex (xmm0, xmm1, ...)\n"
+			"  fpr_double - Floating point registers shown as doubles"
 		};
 
 		ssize_t cmd = -1;
@@ -592,8 +608,8 @@ void read_input(task_t task, thread_act_t thread, x86_thread_state64_t *state, x
 				case show: {
 					if(args == 1) {
 						bool toggled = false;
-						for(size_t i = 0; i < sizeof(register_types) / sizeof(*register_types); i++) {
-							if(strcmp(arg1, register_types[i]) == 0) {
+						for(size_t i = 0; i < ELEMENTS(register_type_names); i++) {
+							if(strcmp(arg1, register_type_names[i]) == 0) {
 								bool val = !show_register_types[i];
 								show_register_types[i] = val;
 								printf("%s toggled %s\n", arg1, val? "on": "off");
