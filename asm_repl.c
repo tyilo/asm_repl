@@ -719,9 +719,9 @@ int main(int argc, const char *argv[]) {
 
 		signal(SIGINT, SIG_IGN);
 
-		// Drop privileges
-		STD_FAIL("setgid", setgid(-2));
-		STD_FAIL("setuid", setuid(-2));
+		// Try to drop privileges
+		setgid(-2);
+		setuid(-2);
 
 		// We are ready for the parent to register the exception handlers
 		write_ready(child_write);
