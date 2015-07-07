@@ -7,12 +7,12 @@
 #include "utils.h"
 
 // TODO: Actually use a library to assemble instead of calling out to rasm2
-bool assemble_string(char *str, uint64_t address, unsigned char **output, size_t *output_size) {
+bool assemble_string(char *str, uint8_t bits, uint64_t address, unsigned char **output, size_t *output_size) {
 	*output_size = 0;
 	*output = malloc(16);
 
 	char *cmd;
-	asprintf(&cmd, "rasm2 -a x86.nasm -b 64 -o 0x%llx \"%s\"", address, str);
+	asprintf(&cmd, "rasm2 -a x86.nasm -b %u -o 0x%llx \"%s\"", bits, address, str);
 
 	FILE *f = popen(cmd, "r");
 	free(cmd);
