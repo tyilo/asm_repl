@@ -16,9 +16,9 @@ Running
 
 * Install [radare2](https://github.com/radare/radare2).
 * `make`
-* `sudo ./asm_repl` (`make run32` or `make run64` to choose a specific architecture)
+* `./asm_repl` (`make run32` or `make run64` to choose a specific architecture)
 
-You need to run the `asm_repl` binary with root privileges as we have to access the process we're running the assembly code in. You can probably codesign the binary so it can use `task_for_pid` without root, however I haven't had any luck so far in doing so.
+You need to codesign `asm_repl` binary or run it as root as we have to access the process we're running the assembly code in. You can codesign the binary so it can use `task_for_pid` without root by creating a certificate named `task_for_pid` using the guide [here](https://gcc.gnu.org/onlinedocs/gnat_ugn/Codesigning-the-Debugger.html) and then running `make`.
 
 Commands
 ==
@@ -30,12 +30,13 @@ Valid input:
     ?[cmd] - show help for a command
 
   Commands:
-    .set   - change value of register
-    .read  - read from memory
-    .write - write to memory
-    .alloc - allocate memory
-    .regs  - show the contents of the registers
-    .show  - toggle shown register types
+    .set      - change value of register
+    .read     - read from memory
+    .write    - write hex to memory
+    .writestr - write string to memory
+    .alloc    - allocate memory
+    .regs     - show the contents of the registers
+    .show     - toggle shown register types
 
 Any other input will be interpreted as x86_64 assembly
 ```
@@ -71,6 +72,17 @@ Writes hexpairs to a destination address
 
   address  - an integer or a register name
   hexpairs - pairs of hexadecimal numbers
+```
+
+`.writestr`
+--
+
+```
+Usage: .writestr address string
+Writes an ascii string to a destination address
+
+  address - an integer or a register name
+  string  - an ascii string
 ```
 
 `.alloc`
