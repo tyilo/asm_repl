@@ -412,6 +412,7 @@ void read_input(task_t task, thread_act_t thread, x86_thread_state_t *state, x86
 	X(set) \
 	X(read) \
 	X(write) \
+	X(writestr) \
 	X(alloc) \
 	X(regs) \
 	X(show)
@@ -440,6 +441,12 @@ void read_input(task_t task, thread_act_t thread, x86_thread_state_t *state, x86
 			"\n"
 			"  address  - an integer or a register name\n"
 			"  hexpairs - pairs of hexadecimal numbers",
+
+			"Usage: .writestr address string\n"
+			"Writes an ascii string to a destination address\n"
+			"\n"
+			"  address - an integer or a register name\n"
+			"  string  - an ascii string",
 
 			"Usage: .alloc len\n"
 			"Allocates some memory and returns the address\n"
@@ -481,12 +488,13 @@ void read_input(task_t task, thread_act_t thread, x86_thread_state_t *state, x86
 				   "    ?[cmd] - show help for a command\n"
 				   "\n"
 				   "  Commands:\n"
-				   "    .set   - change value of register\n"
-				   "    .read  - read from memory\n"
-				   "    .write - write to memory\n"
-				   "    .alloc - allocate memory\n"
-				   "    .regs  - show the contents of the registers\n"
-				   "    .show  - toggle shown register types\n"
+				   "    .set      - change value of register\n"
+				   "    .read     - read from memory\n"
+				   "    .write    - write hex to memory\n"
+				   "    .writestr - write string to memory\n"
+				   "    .alloc    - allocate memory\n"
+				   "    .regs     - show the contents of the registers\n"
+				   "    .show     - toggle shown register types\n"
 				   "\n"
 				   "Any other input will be interpreted as " ARCH_NAME " assembly"
 			);
@@ -639,6 +647,23 @@ void read_input(task_t task, thread_act_t thread, x86_thread_state_t *state, x86
 					printf("Wrote %zu bytes.\n", size);
 
 					free(data);
+					break;
+				}
+				case writestr: {
+					gpr_register_t address;
+					if(args != 2 || !get_value(arg1, state, &address)) {
+						puts(help[cmd]);
+						continue;
+					}
+
+					size_t size = strlen(arg2) + 1;
+
+					KERN_TRY("mach_vm_write", mach_vm_write(task, address, (vm_offset_t)arg2, size), {
+						continue;
+					});
+
+					printf("Wrote %zu bytes.\n", size);
+
 					break;
 				}
 				case alloc: {
