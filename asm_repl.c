@@ -11,6 +11,8 @@
 #include <editline/readline.h>
 #include <ctype.h>
 
+#include "taskport_auth.h"
+
 #include "assemble.h"
 #include "colors.h"
 #include "utils.h"
@@ -748,6 +750,11 @@ void sigchld_handler(int sig) {
 }
 
 int main(int argc, const char *argv[]) {
+	if(!taskport_auth()) {
+		puts("Failed to get taskport auth!");
+		exit(1);
+	}
+
 	int p1[2];
 	int p2[2];
 	pipe(p1);
@@ -795,7 +802,11 @@ int main(int argc, const char *argv[]) {
 		read_ready(parent_read);
 
 		task_t task;
-		KERN_FAIL("task_for_pid", task_for_pid(mach_task_self(), pid, &task));
+		if(task_for_pid(mach_task_self(), pid, &task) != KERN_SUCCESS) {
+			puts("task_for_pid() failed!");
+			puts("Either codesign asm_repl or run as root.");
+			exit(1);
+		}
 		child_task = task;
 
 		pthread_mutex_init(&mutex, NULL);
