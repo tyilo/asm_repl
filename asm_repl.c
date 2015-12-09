@@ -383,6 +383,8 @@ char *histfile;
 bool waiting_for_input = false;
 jmp_buf prompt_jmp_buf;
 
+int syntax_type = 0; // 0 = intel, 1 = at&t
+
 void read_input(task_t task, thread_act_t thread, x86_thread_state_t *state, x86_float_state_t *float_state) {
 	static char *line = NULL;
 	while(true) {
@@ -415,7 +417,8 @@ void read_input(task_t task, thread_act_t thread, x86_thread_state_t *state, x86
 	X(writestr) \
 	X(alloc) \
 	X(regs) \
-	X(show)
+	X(show) \
+	X(syntax)
 		typedef enum {
 			FOREACH_CMD(LIST)
 		} cmds;
@@ -462,7 +465,10 @@ void read_input(task_t task, thread_act_t thread, x86_thread_state_t *state, x86
 			"  gpr        - General purpose registers (rax, rsp, rip, ...)\n"
 			"  status     - Status registers (CF, ZF, ...)\n"
 			"  fpr_hex    - Floating point registers shown in hex (xmm0, xmm1, ...)\n"
-			"  fpr_double - Floating point registers shown as doubles"
+			"  fpr_double - Floating point registers shown as doubles",
+
+			"Usage: .syntax [att|intel]\n"
+			"Changes the assembly syntax to intel or at&t\n"
 		};
 
 		ssize_t cmd = -1;
@@ -495,6 +501,7 @@ void read_input(task_t task, thread_act_t thread, x86_thread_state_t *state, x86
 				   "    .alloc    - allocate memory\n"
 				   "    .regs     - show the contents of the registers\n"
 				   "    .show     - toggle shown register types\n"
+				   "    .syntax   - change the assembly syntax to intel or at&t\n"
 				   "\n"
 				   "Any other input will be interpreted as " ARCH_NAME " assembly"
 			);
@@ -705,6 +712,29 @@ void read_input(task_t task, thread_act_t thread, x86_thread_state_t *state, x86
 					puts(help[cmd]);
 					break;
 				}
+				case syntax: {
+					if(args == 1) {
+						int type = -1;
+						if(strcmp(arg1, "intel") == 0) {
+							type = 0;
+						}
+						if(strcmp(arg1, "att") == 0) {
+							type = 1;
+						}
+
+						if(type != -1) {
+							syntax_type = type;
+							continue;
+						}
+					}
+
+					if(args == 0) {
+						printf("Current syntax: %s\n", syntax_type? "att": "intel");
+					}
+
+					puts(help[cmd]);
+					break;
+				}
 				default: {
 					printf("Invalid command: .%s\n", cmd_name);
 					break;
@@ -714,7 +744,7 @@ void read_input(task_t task, thread_act_t thread, x86_thread_state_t *state, x86
 			unsigned char *assembly;
 			size_t asm_len;
 			mach_vm_address_t pc = state->uts.ts.pc_register;
-			if(assemble_string(line, BITS, pc, &assembly, &asm_len)) {
+			if(assemble_string(line, BITS, pc, &assembly, &asm_len, syntax_type)) {
 				KERN_FAIL("mach_vm_write", mach_vm_write(task, pc, (vm_offset_t)assembly, asm_len));
 				free(assembly);
 				write_int3(task, pc + asm_len);
